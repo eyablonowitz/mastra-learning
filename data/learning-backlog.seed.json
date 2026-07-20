@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "id": "agent-controller-lifecycle",
+      "topic": "AgentController lifecycle",
+      "description": "Understand how the controller creates sessions, drives agent runs, and publishes display-state events.",
+      "difficulty": 1,
+      "prerequisites": [],
+      "status": "completed"
+    },
+    {
+      "id": "memory-and-persistence",
+      "topic": "Memory and persistence",
+      "description": "Understand how threads, Memory, LibSQL storage, and process-local session state work together.",
+      "difficulty": 2,
+      "prerequisites": ["agent-controller-lifecycle"],
+      "status": "completed"
+    },
+    {
+      "id": "agent-tools",
+      "topic": "Agent tools",
+      "description": "Learn how typed tools let an agent observe state, take actions, and incorporate results into later model steps.",
+      "difficulty": 2,
+      "prerequisites": ["agent-controller-lifecycle"],
+      "status": "not-started"
+    },
+    {
+      "id": "tool-approval",
+      "topic": "Tool approval",
+      "description": "Learn how AgentController pauses a mutating tool call for a human decision and resumes the same run.",
+      "difficulty": 2,
+      "prerequisites": ["agent-tools"],
+      "status": "not-started"
+    },
+    {
+      "id": "agents-versus-workflows",
+      "topic": "Agents versus workflows",
+      "description": "Compare model-directed tool loops with predetermined workflow steps and learn when each is appropriate.",
+      "difficulty": 2,
+      "prerequisites": ["agent-tools"],
+      "status": "not-started"
+    }
+  ]
+}

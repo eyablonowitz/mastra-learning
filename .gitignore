@@ -1,0 +1,21 @@
+# dependencies
+/node_modules
+
+# Next.js
+/.next
+/out
+
+# local runtime data
+/.data
+
+# local environment files
+.env*
+!.env.example
+
+# logs and editor files
+*.log
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
