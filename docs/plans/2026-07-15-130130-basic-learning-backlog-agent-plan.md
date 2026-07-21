@@ -34,6 +34,8 @@ The original plan intentionally deferred tools and approval flows while establis
 
 Those foundations remain in place. This plan adds capabilities without introducing another server, another model, authentication, external APIs, or a second agent.
 
+This plan is complete and remains the decision record for the local tool loop and approval behavior. The follow-on [Mastra durable agent and Kubernetes high-availability plan](./2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md) preserves those capabilities while replacing the single-process session, local persistence, and process-bound approval assumptions for a multi-pod deployment. Items listed as deferred below are deferred from this learning slice; the follow-on plan explicitly takes up distributed execution, shared mutable backlog state, and load-balanced approval routing.
+
 ## Why this qualifies as a basic agent
 
 The current application uses Mastra's `Agent` class, but its behavior is equivalent to a stateful chatbot: the model receives user input and message history, then produces a response. Its configured tool surface is empty.
@@ -575,6 +577,7 @@ Each checkpoint should remain runnable before proceeding to the next one. If the
 ## References
 
 - [Original implementation plan](./2026-07-10-102257-mastra-agent-controller-nextjs-plan.md)
+- [Mastra durable agent and Kubernetes high-availability follow-on](./2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md)
 - [Mastra agents overview](https://mastra.ai/docs/agents/overview)
 - [Mastra tools](https://mastra.ai/docs/agents/mcp-guide)
 - [AgentController tool approvals](https://mastra.ai/docs/agent-controller/tool-approvals)

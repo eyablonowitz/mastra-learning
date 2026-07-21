@@ -218,6 +218,14 @@ Visible tool activity is deliberately operational state, not a durable audit tra
 - The UI can display the complete saved transcript, while `Memory` currently supplies only the latest 20 messages to the model.
 - Concurrent sends are rejected while a run is active; there is no multi-tab queue or broader concurrency design.
 
+## Planned durable-agent and Kubernetes direction
+
+The next architecture step is documented in the [Mastra durable agent and Kubernetes high-availability plan](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md). It proposes Mastra's `createEventedAgent()`, Redis Streams, shared PostgreSQL state, explicit run identity, and run-aware SSE so multiple load-balanced pods can accept requests and observe the same background run without sticky sessions.
+
+The intended gains are request-independent execution, reconnectable event streams, replica-safe conversation and backlog state, and continued application availability when an API or observer pod is replaced. The selected evented execution remains best effort: if the pod actively running Bedrock and the tool loop is killed, another pod can preserve and report the emitted state but does not automatically continue that run. An externally orchestrated variant such as `createInngestAgent()` would be the follow-on for executor-independent recovery.
+
+This section describes planned work. The architecture and persistence matrix above remain the source of truth for the currently implemented local application.
+
 ## Useful commands
 
 ```sh
@@ -296,3 +304,4 @@ Plans and decision records:
 
 - [`docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md`](docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md)
 - [`docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md`](docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md)
+- [`docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md`](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md)
