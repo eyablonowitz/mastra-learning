@@ -1,6 +1,7 @@
+import { createFakeUser } from "../src/lib/fake-auth.ts";
 import { getMastraRuntime } from "../src/mastra/runtime.ts";
 
-const { session } = await getMastraRuntime();
+const { session } = await getMastraRuntime(createFakeUser("controller-smoke"));
 const threads = await session.thread.list();
 let persistedMessageCount = 0;
 let persistedThreadId: string | null = null;

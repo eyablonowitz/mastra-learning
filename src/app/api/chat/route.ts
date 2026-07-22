@@ -1,5 +1,6 @@
 import type { AgentControllerEvent } from "@mastra/core/agent-controller";
 import type { ChatMessage } from "@/lib/chat-types";
+import { getCurrentFakeUser, unauthorizedResponse } from "@/lib/current-user";
 import { toChatMessage, toChatState } from "@/mastra/chat-state";
 import { getMastraRuntime } from "@/mastra/runtime";
 
@@ -17,7 +18,10 @@ function errorMessage(error: unknown): string {
 }
 
 export async function GET(request: Request) {
-  const { session } = await getMastraRuntime();
+  const user = await getCurrentFakeUser();
+  if (!user) return unauthorizedResponse();
+
+  const { session } = await getMastraRuntime(user);
   const persistedMessages = await session.thread.listActiveMessages();
   const messages = new Map<string, ChatMessage>(
     persistedMessages.map((message) => [message.id, toChatMessage(message)]),
@@ -99,6 +103,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const user = await getCurrentFakeUser();
+  if (!user) return unauthorizedResponse();
+
   const body = (await request.json().catch(() => null)) as
     | { message?: unknown }
     | null;
@@ -115,7 +122,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { session } = await getMastraRuntime();
+  const { session } = await getMastraRuntime(user);
 
   if (session.run.isRunning()) {
     return Response.json(
@@ -134,6 +141,9 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const user = await getCurrentFakeUser();
+  if (!user) return unauthorizedResponse();
+
   const body = (await request.json().catch(() => null)) as
     | { toolCallId?: unknown; decision?: unknown }
     | null;
@@ -151,7 +161,7 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const { session } = await getMastraRuntime();
+  const { session } = await getMastraRuntime(user);
   const pendingApproval = session.displayState.get().pendingApproval;
 
   if (
@@ -183,7 +193,10 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE() {
-  const { session } = await getMastraRuntime();
+  const user = await getCurrentFakeUser();
+  if (!user) return unauthorizedResponse();
+
+  const { session } = await getMastraRuntime(user);
 
   if (session.run.isRunning()) {
     return Response.json(

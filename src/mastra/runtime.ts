@@ -5,6 +5,7 @@ import type { Session } from "@mastra/core/agent-controller";
 import { LocalFilesystem, Workspace } from "@mastra/core/workspace";
 import { LibSQLStore } from "@mastra/libsql";
 import { Memory } from "@mastra/memory";
+import type { FakeUser } from "../lib/fake-auth.ts";
 import { learningAgent } from "./agent.ts";
 import {
   LEARNING_BACKLOG_READ_TOOL_NAMES,
@@ -30,7 +31,7 @@ export interface MastraRuntime {
   session: Session;
 }
 
-async function createRuntime(): Promise<MastraRuntime> {
+async function createController(): Promise<AgentController> {
   await Promise.all([
     mkdir(DATA_DIRECTORY, { recursive: true }),
     mkdir(WORKSPACE_PATH, { recursive: true }),
@@ -106,11 +107,20 @@ async function createRuntime(): Promise<MastraRuntime> {
 
   await controller.init();
 
-  const session = await controller.createSession({
-    id: "local-session",
-    ownerId: "local-user",
-    resourceId: "local-learning-chat",
-  });
+  return controller;
+}
+
+async function createUserRuntime(user: FakeUser): Promise<MastraRuntime> {
+  const controller = await getMastraController();
+  const resourceId = `fake-chat:${user.id}`;
+  const existingSession = await controller.getSessionByResource(resourceId);
+  const session =
+    existingSession ??
+    (await controller.createSession({
+      id: `fake-session:${user.id}`,
+      ownerId: `fake-user:${user.id}`,
+      resourceId,
+    }));
 
   await session.permissions.setForCategory({
     category: "read",
@@ -125,12 +135,30 @@ async function createRuntime(): Promise<MastraRuntime> {
 }
 
 const globalRuntime = globalThis as typeof globalThis & {
-  mastraLearningRuntime?: Promise<MastraRuntime>;
+  mastraLearningController?: Promise<AgentController>;
+  mastraLearningUserSessions?: Map<string, Promise<MastraRuntime>>;
 };
 
-export function getMastraRuntime(): Promise<MastraRuntime> {
-  globalRuntime.mastraLearningRuntime ??= createRuntime();
-  return globalRuntime.mastraLearningRuntime;
+export function getMastraController(): Promise<AgentController> {
+  globalRuntime.mastraLearningController ??= createController();
+  return globalRuntime.mastraLearningController;
+}
+
+export function getMastraRuntime(user: FakeUser): Promise<MastraRuntime> {
+  const sessions = (globalRuntime.mastraLearningUserSessions ??= new Map());
+  const cached = sessions.get(user.id);
+
+  if (cached) return cached;
+
+  const runtimePromise = createUserRuntime(user);
+  sessions.set(user.id, runtimePromise);
+  void runtimePromise.catch(() => {
+    if (sessions.get(user.id) === runtimePromise) {
+      sessions.delete(user.id);
+    }
+  });
+
+  return runtimePromise;
 }
 
 export const mastraDataLocation = DATABASE_PATH;

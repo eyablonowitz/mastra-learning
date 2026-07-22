@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { AgentControllerEvent } from "@mastra/core/agent-controller";
-import { getMastraRuntime } from "../src/mastra/runtime.ts";
+import { getMastraController } from "../src/mastra/runtime.ts";
 import { LEARNING_BACKLOG_READ_TOOL_NAMES } from "../src/mastra/tools/learning-backlog.ts";
 
-const { controller } = await getMastraRuntime();
+const controller = await getMastraController();
 const smokeId = randomUUID();
 const session = await controller.createSession({
   id: `agent-tools-smoke-${smokeId}`,

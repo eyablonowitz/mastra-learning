@@ -1,6 +1,6 @@
 # Mastra AgentController learning app
 
-A local-only Next.js application for learning how Mastra's `AgentController` connects a browser UI to a persistent, tool-using agent session.
+A local-only Next.js application for learning how Mastra's `AgentController` connects a browser UI to persistent, tool-using agent sessions. A development-only name prompt partitions chat state between fake users; it is not secure authentication.
 
 The model is Claude Sonnet 5 through Amazon Bedrock. AWS authentication uses the standard SDK credential chain and the `dev` profile; no AWS credentials are stored in this project.
 
@@ -34,8 +34,12 @@ The default is `us.anthropic.claude-sonnet-5`.
 
 ```mermaid
 flowchart LR
+    Prompt["Name prompt"] --> Auth["/api/session"]
+    Auth --> Cookie["HTTP-only fake-user cookie"]
     UI["Next.js chat UI"] --> Route["/api/chat Route Handler"]
-    Route --> Session["AgentController Session"]
+    Cookie -. "identity" .-> Route
+    Route --> Session["Per-user AgentController Session"]
+    Session --> Controller["Shared AgentController"]
     Session --> Agent["Mastra Agent"]
     Agent --> Bedrock["AWS Bedrock<br/>Claude Sonnet 5"]
     Agent --> Reads["Read tools<br/>list / get"]
@@ -50,12 +54,21 @@ flowchart LR
 
 The application runs in one Next.js process:
 
+- `GET`, `POST`, and `DELETE /api/session` read, create, and clear the fake-user browser session.
 - `POST /api/chat` sends a user message and starts an agent run.
 - `PATCH /api/chat` approves or declines the exact pending tool call.
 - `GET /api/chat` opens a Server-Sent Events stream of complete UI snapshots.
 - `DELETE /api/chat` creates and selects a new conversation thread.
 
-The route subscribes to the session and renders from `display_state_changed` snapshots, with high-level `message_end` events maintaining the persisted transcript projection.
+Every chat operation derives its user exclusively from the HTTP-only cookie. The route subscribes to that user's session and renders from `display_state_changed` snapshots, with high-level `message_end` events maintaining the persisted transcript projection.
+
+## Fake authentication and isolation
+
+Before the chat mounts, the app asks for a name. Names are Unicode-normalized, trimmed, whitespace-collapsed, and matched case-insensitively, so `Alice`, `alice`, and ` Alice ` identify the same fake user. The server hashes the normalized name into opaque, stable Mastra session, owner, and resource identifiers.
+
+The cookie lasts 30 days and is `HttpOnly`, `SameSite=Lax`, and `Secure` in production. It keeps ordinary browser requests from selecting an arbitrary user ID, but it does not prove identity: anyone can sign out and enter another person's name. Use this only in a local or otherwise trusted environment.
+
+Each fake user has isolated conversation threads, messages, memory, active run state, tool activity, and pending approvals. The learning backlog remains deliberately shared, so an approved status change by one user is visible to every user.
 
 ## Why this is now an agent
 
@@ -98,7 +111,7 @@ The app deliberately has one mode, `chat`, which exposes exactly the four backlo
 
 ### Session
 
-The controller creates one session for the local user. The session owns live per-conversation state:
+The controller creates and caches one session per normalized fake user. Each session has a stable, hash-derived resource ID and owns live per-conversation state:
 
 - Active thread
 - Current mode and model
@@ -190,15 +203,15 @@ This keeps React from reconstructing Mastra's event state machine. Each browser 
 
 A browser refresh discards React state and opens a new SSE connection. `GET /api/chat` asks the still-running server session for persisted messages and its current display state, then sends one initial `ChatState` snapshot.
 
-The server runtime is memoized on `globalThis` in [`src/mastra/runtime.ts`](src/mastra/runtime.ts). This prevents Next.js development reloads from casually creating competing controllers and database connections, but it is only a process-local cache.
+The server controller and per-user session map are memoized on `globalThis` in [`src/mastra/runtime.ts`](src/mastra/runtime.ts). This prevents Next.js development reloads from casually creating competing controllers, sessions, and database connections, but it is only a process-local cache.
 
-A server restart is the stronger persistence test. It destroys the controller, session, subscriptions, display state, pending approval, and active model run. On startup, the app creates a new controller and session with the same fixed resource ID, opens the same LibSQL database, and resumes its persisted thread and messages. The backlog is independently recovered from its JSON file.
+A server restart is the stronger persistence test. It destroys the controller, live sessions, subscriptions, display state, pending approvals, and active model runs. On the next request for a fake user, the app recreates that user's session with the same deterministic resource ID, opens the same LibSQL database, and resumes the user's most recent persisted thread and messages. The backlog is independently recovered from its JSON file.
 
 | State | Storage location | Browser refresh | Server restart |
 | --- | --- | --- | --- |
 | Textarea contents | React | Lost | Lost |
 | SSE connection | Browser and server | Reconnected | Reconnected |
-| Active `Session` object | Node.js process | Preserved | Recreated |
+| Active per-user `Session` object | Node.js process | Preserved | Recreated |
 | Threads and completed messages | LibSQL | Preserved | Preserved |
 | Learning-item statuses | Backlog JSON | Preserved | Preserved |
 | Streaming assistant text | Session display state | Usually preserved | Lost |
@@ -209,7 +222,8 @@ Visible tool activity is deliberately operational state, not a durable audit tra
 
 ### Persistence limitations
 
-- The session, owner, and resource IDs are fixed. Every local browser tab shares one session and active thread.
+- The name prompt is not secure authentication. Knowing another name is enough to assume that identity and access its chats.
+- Tabs and browsers using the same normalized name intentionally share one session and active thread.
 - “New conversation” creates another persisted thread, but the UI has no thread list for returning to older conversations.
 - SSE events have no IDs or `Last-Event-ID` replay. Reconnection sends a fresh snapshot instead of replaying missed events.
 - A browser disconnect does not stop the Node.js model run, but a server crash does. A partial response or pending approval is not resumed.
@@ -231,6 +245,7 @@ This section describes planned work. The architecture and persistence matrix abo
 ```sh
 npm run typecheck
 npm run lint
+npm test
 npm run build
 AWS_PROFILE=dev AWS_REGION=us-east-1 npm run bedrock:smoke
 AWS_PROFILE=dev AWS_REGION=us-east-1 npm run controller:smoke
@@ -279,8 +294,9 @@ This deletes both backlog state and conversation history. These are intentionall
 Implemented:
 
 - Local Next.js chat with Bedrock Claude Sonnet 5
-- One AgentController, session, mode, and reactive agent
-- Persisted conversation threads and memory
+- Development-only name prompt with a 30-day HTTP-only browser session
+- One shared AgentController with isolated per-user sessions
+- Persisted, per-user conversation threads and memory
 - Agent-selected list/get observation tools
 - Approval-gated started/completed actions
 - Visible tool inputs, results, errors, and pending approval
@@ -288,7 +304,8 @@ Implemented:
 
 Intentionally deferred:
 
-- Authentication, multiple users, or per-user backlogs
+- Real authentication, passwords, identity providers, roles, and protection against name impersonation
+- Per-user learning backlogs
 - Arbitrary create, edit, delete, reorder, or status-reset tools
 - Multiple modes and model selection
 - Background jobs, schedules, proactive notifications, and external APIs
@@ -305,3 +322,4 @@ Plans and decision records:
 - [`docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md`](docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md)
 - [`docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md`](docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md)
 - [`docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md`](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md)
+- [`docs/plans/2026-07-22-114821-basic-fake-auth-chat-isolation-plan.md`](docs/plans/2026-07-22-114821-basic-fake-auth-chat-isolation-plan.md)

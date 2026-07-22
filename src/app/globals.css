@@ -31,6 +31,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -40,6 +41,7 @@ button {
 }
 
 button:disabled,
+input:disabled,
 textarea:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -65,6 +67,27 @@ textarea:disabled {
   gap: 2rem;
   padding: 1.5rem 1.75rem 1.25rem;
   border-bottom: 1px solid var(--line);
+}
+
+.chat-header-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.65rem;
+}
+
+.active-user {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.active-user strong {
+  color: var(--ink);
+}
+
+.header-buttons {
+  display: flex;
+  gap: 0.6rem;
 }
 
 .eyebrow,
@@ -465,6 +488,72 @@ h1 {
   border: 0;
 }
 
+.sign-in-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 1rem;
+}
+
+.sign-in-card {
+  width: min(30rem, 100%);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow: 0 1.25rem 3.5rem rgb(31 48 38 / 10%);
+}
+
+.sign-in-intro {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.sign-in-form {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.sign-in-form label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.sign-in-form input {
+  width: 100%;
+  padding: 0.8rem 0.9rem;
+  background: white;
+  color: var(--ink);
+  border: 1px solid #bcc5be;
+  border-radius: 0.55rem;
+  outline: none;
+}
+
+.sign-in-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(33 110 78 / 12%);
+}
+
+.sign-in-form .primary-button {
+  margin-top: 0.25rem;
+}
+
+.sign-in-error {
+  margin: 0;
+  color: #8c2f29;
+  font-size: 0.85rem;
+}
+
+.fake-auth-notice {
+  margin: 1.25rem 0 0;
+  padding-top: 1rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 42rem) {
   .chat-shell {
     width: 100%;
@@ -478,6 +567,14 @@ h1 {
     align-items: stretch;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .chat-header-actions {
+    justify-items: start;
+  }
+
+  .header-buttons {
+    flex-wrap: wrap;
   }
 
   .secondary-button {

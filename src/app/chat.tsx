@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type {
   ChatState,
   ChatToolActivity,
@@ -166,7 +167,8 @@ async function readError(response: Response): Promise<string> {
   return body?.error ?? `Request failed with status ${response.status}.`;
 }
 
-export function Chat() {
+export function Chat({ userName }: { userName: string }) {
+  const router = useRouter();
   const [chat, setChat] = useState(initialState);
   const [message, setMessage] = useState("");
   const [connection, setConnection] = useState<
@@ -177,6 +179,7 @@ export function Chat() {
     toolCallId: string;
     decision: "approve" | "decline";
   } | null>(null);
+  const [isSwitchingUser, setIsSwitchingUser] = useState(false);
   const transcriptEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -187,10 +190,18 @@ export function Chat() {
       setChat(JSON.parse(event.data) as ChatState);
       setConnection("connected");
     };
-    events.onerror = () => setConnection("reconnecting");
+    events.onerror = () => {
+      setConnection("reconnecting");
+      void fetch("/api/session")
+        .then((response) => response.json())
+        .then((body: { user?: unknown }) => {
+          if (body.user === null) router.refresh();
+        })
+        .catch(() => undefined);
+    };
 
     return () => events.close();
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -218,6 +229,11 @@ export function Chat() {
     }
 
     if (!response.ok) {
+      if (response.status === 401) {
+        router.refresh();
+        return;
+      }
+
       setRequestError(await readError(response));
       setMessage(content);
     }
@@ -235,6 +251,11 @@ export function Chat() {
     }
 
     if (!response.ok) {
+      if (response.status === 401) {
+        router.refresh();
+        return;
+      }
+
       setRequestError(await readError(response));
     }
   };
@@ -268,9 +289,39 @@ export function Chat() {
     }
 
     if (!response.ok) {
+      if (response.status === 401) {
+        router.refresh();
+        return;
+      }
+
       setRequestError(await readError(response));
       setApprovalSubmission(null);
     }
+  };
+
+  const switchUser = async () => {
+    if (chat.isRunning || chat.pendingApproval || isSwitchingUser) return;
+
+    setRequestError(null);
+    setIsSwitchingUser(true);
+
+    const response = await fetch("/api/session", { method: "DELETE" }).catch(
+      () => null,
+    );
+
+    if (!response) {
+      setRequestError("Could not reach the local server.");
+      setIsSwitchingUser(false);
+      return;
+    }
+
+    if (!response.ok) {
+      setRequestError(await readError(response));
+      setIsSwitchingUser(false);
+      return;
+    }
+
+    router.refresh();
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -307,14 +358,33 @@ export function Chat() {
             Next.js → AgentController → Bedrock Claude Sonnet 5
           </p>
         </div>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={startNewConversation}
-          disabled={chat.isRunning || connection !== "connected"}
-        >
-          New conversation
-        </button>
+        <div className="chat-header-actions">
+          <p className="active-user">
+            Chatting as <strong>{userName}</strong>
+          </p>
+          <div className="header-buttons">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={startNewConversation}
+              disabled={chat.isRunning || connection !== "connected"}
+            >
+              New conversation
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={switchUser}
+              disabled={
+                chat.isRunning ||
+                chat.pendingApproval !== null ||
+                isSwitchingUser
+              }
+            >
+              {isSwitchingUser ? "Switching…" : "Switch user"}
+            </button>
+          </div>
+        </div>
       </header>
 
       <section className="status-bar" aria-label="Chat status">

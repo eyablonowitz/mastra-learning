@@ -8,7 +8,7 @@ import {
   writeLearningBacklog,
 } from "../src/mastra/learning-backlog-store.ts";
 import type { LearningItemStatus } from "../src/mastra/learning-backlog-schema.ts";
-import { getMastraRuntime } from "../src/mastra/runtime.ts";
+import { getMastraController } from "../src/mastra/runtime.ts";
 import { LEARNING_BACKLOG_WRITE_TOOL_NAMES } from "../src/mastra/tools/learning-backlog.ts";
 
 type ApprovalEvent = Extract<
@@ -53,7 +53,7 @@ async function runApprovalDecision({
   expectedStatusBefore: LearningItemStatus;
   decision: "approve" | "decline";
 }) {
-  const { controller } = await getMastraRuntime();
+  const controller = await getMastraController();
   const smokeId = randomUUID();
   const session = await controller.createSession({
     id: `agent-approval-smoke-${smokeId}`,

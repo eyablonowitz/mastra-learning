@@ -7,6 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --test src/lib/fake-auth.test.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "bedrock:smoke": "node scripts/bedrock-smoke.ts",
