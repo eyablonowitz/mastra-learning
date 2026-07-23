@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test src/lib/fake-auth.test.ts",
+    "test": "node --test src/lib/*.test.ts src/app-data/*.test.ts src/mastra/*.test.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "bedrock:smoke": "node scripts/bedrock-smoke.ts",
@@ -23,6 +23,7 @@
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "5.0.16",
     "@aws-sdk/credential-providers": "3.1084.0",
+    "@libsql/client": "0.17.4",
     "@mastra/core": "1.50.1",
     "@mastra/libsql": "1.15.1",
     "@mastra/memory": "1.22.2",

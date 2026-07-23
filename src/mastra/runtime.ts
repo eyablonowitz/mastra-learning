@@ -5,7 +5,9 @@ import type { Session } from "@mastra/core/agent-controller";
 import { LocalFilesystem, Workspace } from "@mastra/core/workspace";
 import { LibSQLStore } from "@mastra/libsql";
 import { Memory } from "@mastra/memory";
+import type { LearningSpace } from "../app-data/learning-spaces.ts";
 import type { FakeUser } from "../lib/fake-auth.ts";
+import { getLearningIdentifiers } from "../lib/learning-identity.ts";
 import { learningAgent } from "./agent.ts";
 import {
   LEARNING_BACKLOG_READ_TOOL_NAMES,
@@ -110,15 +112,21 @@ async function createController(): Promise<AgentController> {
   return controller;
 }
 
-async function createUserRuntime(user: FakeUser): Promise<MastraRuntime> {
+async function createSpaceRuntime(
+  user: FakeUser,
+  space: LearningSpace,
+): Promise<MastraRuntime> {
   const controller = await getMastraController();
-  const resourceId = `fake-chat:${user.id}`;
+  const { ownerId, resourceId, sessionId } = getLearningIdentifiers(
+    user,
+    space,
+  );
   const existingSession = await controller.getSessionByResource(resourceId);
   const session =
     existingSession ??
     (await controller.createSession({
-      id: `fake-session:${user.id}`,
-      ownerId: `fake-user:${user.id}`,
+      id: sessionId,
+      ownerId,
       resourceId,
     }));
 
@@ -136,7 +144,7 @@ async function createUserRuntime(user: FakeUser): Promise<MastraRuntime> {
 
 const globalRuntime = globalThis as typeof globalThis & {
   mastraLearningController?: Promise<AgentController>;
-  mastraLearningUserSessions?: Map<string, Promise<MastraRuntime>>;
+  mastraLearningSpaceSessions?: Map<string, Promise<MastraRuntime>>;
 };
 
 export function getMastraController(): Promise<AgentController> {
@@ -144,17 +152,21 @@ export function getMastraController(): Promise<AgentController> {
   return globalRuntime.mastraLearningController;
 }
 
-export function getMastraRuntime(user: FakeUser): Promise<MastraRuntime> {
-  const sessions = (globalRuntime.mastraLearningUserSessions ??= new Map());
-  const cached = sessions.get(user.id);
+export function getMastraRuntime(
+  user: FakeUser,
+  space: LearningSpace,
+): Promise<MastraRuntime> {
+  const sessions = (globalRuntime.mastraLearningSpaceSessions ??= new Map());
+  const { resourceId } = getLearningIdentifiers(user, space);
+  const cached = sessions.get(resourceId);
 
   if (cached) return cached;
 
-  const runtimePromise = createUserRuntime(user);
-  sessions.set(user.id, runtimePromise);
+  const runtimePromise = createSpaceRuntime(user, space);
+  sessions.set(resourceId, runtimePromise);
   void runtimePromise.catch(() => {
-    if (sessions.get(user.id) === runtimePromise) {
-      sessions.delete(user.id);
+    if (sessions.get(resourceId) === runtimePromise) {
+      sessions.delete(resourceId);
     }
   });
 

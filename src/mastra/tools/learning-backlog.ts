@@ -1,16 +1,16 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { getLearningSpaceRepository } from "../../app-data/learning-spaces.ts";
+import { getLearningOwnerId } from "../../lib/learning-identity.ts";
 import {
   learningItemSchema,
   learningItemStatusSchema,
   learningItemSummarySchema,
 } from "../learning-backlog-schema.ts";
 import {
-  getLearningItem,
-  listLearningItems,
-  markLearningItemComplete,
-  markLearningItemStarted,
-} from "../learning-backlog-store.ts";
+  learningRequestContextSchema,
+  requireLearningRequestContext,
+} from "../learning-request-context.ts";
 
 export const LEARNING_BACKLOG_READ_TOOL_NAMES = {
   list: "list_learning_items",
@@ -38,12 +38,22 @@ export const listLearningItemsTool = createTool({
       items: z.array(learningItemSummarySchema),
     })
     .strict(),
+  requestContextSchema: learningRequestContextSchema,
   // Function-form approval is authoritative over AgentController's global
   // approval gate, so harmless reads stay inside one uninterrupted tool loop.
   requireApproval: () => false,
-  execute: async ({ status }) => ({
-    items: await listLearningItems(status),
-  }),
+  execute: async ({ status }, { requestContext }) => {
+    const identity = requireLearningRequestContext(requestContext);
+    const repository = await getLearningSpaceRepository();
+
+    return {
+      items: await repository.listLearningItems(
+        getLearningOwnerId(identity.userId),
+        identity.spaceId,
+        status,
+      ),
+    };
+  },
 });
 
 export const getLearningItemTool = createTool({
@@ -60,10 +70,20 @@ export const getLearningItemTool = createTool({
       item: learningItemSchema,
     })
     .strict(),
+  requestContextSchema: learningRequestContextSchema,
   requireApproval: () => false,
-  execute: async ({ id }) => ({
-    item: await getLearningItem(id),
-  }),
+  execute: async ({ id }, { requestContext }) => {
+    const identity = requireLearningRequestContext(requestContext);
+    const repository = await getLearningSpaceRepository();
+
+    return {
+      item: await repository.getLearningItem(
+        getLearningOwnerId(identity.userId),
+        identity.spaceId,
+        id,
+      ),
+    };
+  },
 });
 
 export const markLearningItemCompleteTool = createTool({
@@ -81,8 +101,18 @@ export const markLearningItemCompleteTool = createTool({
       changed: z.boolean(),
     })
     .strict(),
+  requestContextSchema: learningRequestContextSchema,
   requireApproval: true,
-  execute: async ({ id }) => markLearningItemComplete(id),
+  execute: async ({ id }, { requestContext }) => {
+    const identity = requireLearningRequestContext(requestContext);
+    const repository = await getLearningSpaceRepository();
+
+    return repository.markLearningItemComplete(
+      getLearningOwnerId(identity.userId),
+      identity.spaceId,
+      id,
+    );
+  },
 });
 
 export const markLearningItemStartedTool = createTool({
@@ -100,8 +130,18 @@ export const markLearningItemStartedTool = createTool({
       changed: z.boolean(),
     })
     .strict(),
+  requestContextSchema: learningRequestContextSchema,
   requireApproval: true,
-  execute: async ({ id }) => markLearningItemStarted(id),
+  execute: async ({ id }, { requestContext }) => {
+    const identity = requireLearningRequestContext(requestContext);
+    const repository = await getLearningSpaceRepository();
+
+    return repository.markLearningItemStarted(
+      getLearningOwnerId(identity.userId),
+      identity.spaceId,
+      id,
+    );
+  },
 });
 
 export const learningBacklogReadTools = {

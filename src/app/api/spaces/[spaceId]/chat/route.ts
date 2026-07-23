@@ -1,11 +1,17 @@
 import type { AgentControllerEvent } from "@mastra/core/agent-controller";
 import type { ChatMessage } from "@/lib/chat-types";
-import { getCurrentFakeUser, unauthorizedResponse } from "@/lib/current-user";
+import { authorizeLearningSpace } from "@/lib/learning-space-request";
 import { toChatMessage, toChatState } from "@/mastra/chat-state";
+import { createLearningRequestContext } from "@/mastra/learning-request-context";
 import { getMastraRuntime } from "@/mastra/runtime";
+import { ensureActiveThreadPreview } from "@/mastra/thread-summary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+interface RouteContext {
+  params: Promise<{ spaceId: string }>;
+}
 
 const encoder = new TextEncoder();
 
@@ -17,11 +23,17 @@ function errorMessage(error: unknown): string {
   return "An unexpected error occurred.";
 }
 
-export async function GET(request: Request) {
-  const user = await getCurrentFakeUser();
-  if (!user) return unauthorizedResponse();
+export async function GET(request: Request, context: RouteContext) {
+  const { spaceId } = await context.params;
+  const authorization = await authorizeLearningSpace(spaceId);
 
-  const { session } = await getMastraRuntime(user);
+  if (!authorization.authorized) {
+    return authorization.response;
+  }
+
+  const { user, space } = authorization.value;
+  const { session } = await getMastraRuntime(user, space);
+  const projectedThreadId = session.thread.getId();
   const persistedMessages = await session.thread.listActiveMessages();
   const messages = new Map<string, ChatMessage>(
     persistedMessages.map((message) => [message.id, toChatMessage(message)]),
@@ -31,16 +43,53 @@ export async function GET(request: Request) {
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let threadReloadGeneration = 0;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (payload: unknown) => {
         if (!closed) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+          );
         }
       };
 
       const sendState = () => send(toChatState(session, messages, lastError));
+
+      const reloadActiveThread = () => {
+        const generation = ++threadReloadGeneration;
+        const expectedThreadId = session.thread.getId();
+
+        messages.clear();
+        lastError = null;
+        sendState();
+
+        void session.thread
+          .listActiveMessages()
+          .then((persistedThreadMessages) => {
+            if (
+              closed ||
+              generation !== threadReloadGeneration ||
+              session.thread.getId() !== expectedThreadId
+            ) {
+              return;
+            }
+
+            messages.clear();
+            for (const message of persistedThreadMessages) {
+              const chatMessage = toChatMessage(message);
+              messages.set(chatMessage.id, chatMessage);
+            }
+            sendState();
+          })
+          .catch((error: unknown) => {
+            if (closed || generation !== threadReloadGeneration) return;
+
+            lastError = errorMessage(error);
+            sendState();
+          });
+      };
 
       const handleEvent = (event: AgentControllerEvent) => {
         if (event.type === "agent_start") {
@@ -53,8 +102,7 @@ export async function GET(request: Request) {
         }
 
         if (event.type === "thread_created" || event.type === "thread_changed") {
-          messages.clear();
-          lastError = null;
+          reloadActiveThread();
         }
 
         if (event.type === "error") {
@@ -77,6 +125,7 @@ export async function GET(request: Request) {
         "abort",
         () => {
           closed = true;
+          threadReloadGeneration += 1;
           unsubscribe?.();
           if (heartbeat) clearInterval(heartbeat);
           controller.close();
@@ -84,10 +133,15 @@ export async function GET(request: Request) {
         { once: true },
       );
 
-      sendState();
+      if (session.thread.getId() === projectedThreadId) {
+        sendState();
+      } else {
+        reloadActiveThread();
+      }
     },
     cancel() {
       closed = true;
+      threadReloadGeneration += 1;
       unsubscribe?.();
       if (heartbeat) clearInterval(heartbeat);
     },
@@ -102,9 +156,13 @@ export async function GET(request: Request) {
   });
 }
 
-export async function POST(request: Request) {
-  const user = await getCurrentFakeUser();
-  if (!user) return unauthorizedResponse();
+export async function POST(request: Request, context: RouteContext) {
+  const { spaceId } = await context.params;
+  const authorization = await authorizeLearningSpace(spaceId);
+
+  if (!authorization.authorized) {
+    return authorization.response;
+  }
 
   const body = (await request.json().catch(() => null)) as
     | { message?: unknown }
@@ -122,7 +180,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const { session } = await getMastraRuntime(user);
+  const { user, space } = authorization.value;
+  const { session } = await getMastraRuntime(user, space);
 
   if (session.run.isRunning()) {
     return Response.json(
@@ -132,7 +191,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    await session.sendMessage({ content: message });
+    await ensureActiveThreadPreview(session, message);
+    await session.sendMessage({
+      content: message,
+      requestContext: createLearningRequestContext(user, space),
+    });
     return new Response(null, { status: 204 });
   } catch (error) {
     console.error("Agent run failed:", error);
@@ -140,9 +203,13 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PATCH(request: Request) {
-  const user = await getCurrentFakeUser();
-  if (!user) return unauthorizedResponse();
+export async function PATCH(request: Request, context: RouteContext) {
+  const { spaceId } = await context.params;
+  const authorization = await authorizeLearningSpace(spaceId);
+
+  if (!authorization.authorized) {
+    return authorization.response;
+  }
 
   const body = (await request.json().catch(() => null)) as
     | { toolCallId?: unknown; decision?: unknown }
@@ -161,7 +228,8 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const { session } = await getMastraRuntime(user);
+  const { user, space } = authorization.value;
+  const { session } = await getMastraRuntime(user, space);
   const pendingApproval = session.displayState.get().pendingApproval;
 
   if (
@@ -179,6 +247,7 @@ export async function PATCH(request: Request) {
   session.respondToToolApproval({
     decision,
     toolCallId,
+    requestContext: createLearningRequestContext(user, space),
     ...(decision === "decline"
       ? {
           declineContext: {
@@ -189,22 +258,5 @@ export async function PATCH(request: Request) {
       : {}),
   });
 
-  return new Response(null, { status: 204 });
-}
-
-export async function DELETE() {
-  const user = await getCurrentFakeUser();
-  if (!user) return unauthorizedResponse();
-
-  const { session } = await getMastraRuntime(user);
-
-  if (session.run.isRunning()) {
-    return Response.json(
-      { error: "Wait for the current response to finish." },
-      { status: 409 },
-    );
-  }
-
-  await session.thread.create({ title: "New conversation" });
   return new Response(null, { status: 204 });
 }

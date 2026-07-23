@@ -1,18 +1,34 @@
 # Mastra AgentController learning app
 
-A local-only Next.js application for learning how Mastra's `AgentController` connects a browser UI to persistent, tool-using agent sessions. A development-only name prompt partitions chat state between fake users; it is not secure authentication.
+A local Next.js application for learning how Mastra `AgentController` connects
+a browser UI to persistent, tool-using agent sessions.
 
-The model is Claude Sonnet 5 through Amazon Bedrock. AWS authentication uses the standard SDK credential chain and the `dev` profile; no AWS credentials are stored in this project.
+The application has a four-level ownership model:
+
+```text
+fake user
+└── learning space
+    └── Mastra resource and Session
+        └── conversation threads
+```
+
+Each learning space begins with an independent copy of the tracked Mastra
+curriculum. Conversations inside one space share that space's backlog, but
+their transcripts remain separate. Other users and spaces have different
+backlogs, resources, Sessions, threads, runs, and approvals.
+
+The name prompt is development-only fake authentication, not proof of identity.
+Use this app only on a local or otherwise trusted machine.
 
 ## Run locally
 
 Prerequisites:
 
 - [nvm](https://github.com/nvm-sh/nvm)
-- An AWS CLI profile named `dev`
-- Bedrock access to the Claude Sonnet 5 US inference profile
+- an AWS CLI profile named `dev`
+- Bedrock access to the Claude Sonnet 5 inference profile
 
-Install and start the app:
+Install and start:
 
 ```sh
 nvm use
@@ -20,227 +36,208 @@ npm install
 AWS_PROFILE=dev AWS_REGION=us-east-1 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Then open [http://localhost:3000](http://localhost:3000).
 
-Optional configuration:
+The default model is `us.anthropic.claude-sonnet-5`. Override it when needed:
 
 ```sh
 BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5
 ```
 
-The default is `us.anthropic.claude-sonnet-5`.
-
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Prompt["Name prompt"] --> Auth["/api/session"]
-    Auth --> Cookie["HTTP-only fake-user cookie"]
-    UI["Next.js chat UI"] --> Route["/api/chat Route Handler"]
-    Cookie -. "identity" .-> Route
-    Route --> Session["Per-user AgentController Session"]
-    Session --> Controller["Shared AgentController"]
-    Session --> Agent["Mastra Agent"]
+    Browser["Browser shell"] --> Auth["Fake-user cookie"]
+    Browser --> Spaces["Space and thread routes"]
+    Auth -. "trusted identity" .-> Spaces
+    Spaces --> AppDB[("app.db<br/>spaces and learning items")]
+    Spaces --> Session["Session for user + space resource"]
+    Session --> Threads["Conversation threads"]
+    Threads --> MastraDB[("mastra.db<br/>threads and messages")]
+    Session --> Agent["Mastra agent"]
     Agent --> Bedrock["AWS Bedrock<br/>Claude Sonnet 5"]
-    Agent --> Reads["Read tools<br/>list / get"]
-    Agent --> Writes["Write tools<br/>start / complete"]
-    Reads --> Backlog[".data/learning-backlog.json"]
-    Writes --> Backlog
-    Session --> Memory["Mastra Memory"]
-    Memory --> LibSQL[".data/mastra.db"]
-    Session -. "display state" .-> Route
-    Route -. "Server-Sent Events" .-> UI
+    Agent --> Tools["Scoped backlog tools"]
+    Tools --> AppDB
+    Session -. "display snapshots over SSE" .-> Browser
 ```
 
-The application runs in one Next.js process:
+The application runs one shared `AgentController` in the Next.js process.
+[`src/mastra/runtime.ts`](src/mastra/runtime.ts) caches one live `Session` per
+derived learning-space resource. A Session owns the active thread, run,
+approval, suspension, display state, and event subscription for that space.
 
-- `GET`, `POST`, and `DELETE /api/session` read, create, and clear the fake-user browser session.
-- `POST /api/chat` sends a user message and starts an agent run.
-- `PATCH /api/chat` approves or declines the exact pending tool call.
-- `GET /api/chat` opens a Server-Sent Events stream of complete UI snapshots.
-- `DELETE /api/chat` creates and selects a new conversation thread.
+The resource hierarchy is enforced server-side:
 
-Every chat operation derives its user exclusively from the HTTP-only cookie. The route subscribes to that user's session and renders from `display_state_changed` snapshots, with high-level `message_end` events maintaining the persisted transcript projection.
+1. the HTTP-only cookie selects the normalized fake user;
+2. a space route verifies `(ownerId, spaceId)` in the application database;
+3. the server derives stable owner, resource, and Session IDs from that trusted
+   user and space;
+4. thread switching verifies the persisted thread's `resourceId`; and
+5. backlog tools receive server-created `RequestContext` containing only the
+   validated user and space IDs.
 
-## Fake authentication and isolation
+Client-supplied owner, resource, Session, or database identity is never trusted.
 
-Before the chat mounts, the app asks for a name. Names are Unicode-normalized, trimmed, whitespace-collapsed, and matched case-insensitively, so `Alice`, `alice`, and ` Alice ` identify the same fake user. The server hashes the normalized name into opaque, stable Mastra session, owner, and resource identifiers.
+## HTTP and SSE surface
 
-The cookie lasts 30 days and is `HttpOnly`, `SameSite=Lax`, and `Secure` in production. It keeps ordinary browser requests from selecting an arbitrary user ID, but it does not prove identity: anyone can sign out and enter another person's name. Use this only in a local or otherwise trusted environment.
+| Route | Purpose |
+| --- | --- |
+| `GET /api/session` | Read the fake-user session. |
+| `POST /api/session` | Normalize a name and create the HTTP-only cookie. |
+| `DELETE /api/session` | Clear the fake-user cookie. |
+| `GET /api/spaces` | List spaces, provisioning the default space atomically when needed. |
+| `POST /api/spaces` | Create a space and seed its independent curriculum copy. |
+| `GET /api/spaces/:spaceId/chat` | Stream complete `ChatState` snapshots over SSE. |
+| `POST /api/spaces/:spaceId/chat` | Send a message through the selected Session. |
+| `PATCH /api/spaces/:spaceId/chat` | Approve or decline the exact pending tool call. |
+| `GET /api/spaces/:spaceId/threads` | List resource-scoped conversation summaries. |
+| `POST /api/spaces/:spaceId/threads` | Create and activate a conversation while idle. |
+| `PUT /api/spaces/:spaceId/threads/:threadId/active` | Verify ownership and switch the active thread while idle. |
 
-Each fake user has isolated conversation threads, messages, memory, active run state, tool activity, and pending approvals. The learning backlog remains deliberately shared, so an approved status change by one user is visible to every user.
+The selected space is stored in the tab URL as `?space=...`. Switching a
+conversation keeps the space's EventSource connected; the Session emits the
+thread lifecycle event and the server replaces the transcript projection with
+the selected thread's persisted messages. Switching spaces remounts the
+space-scoped stream.
 
-## Why this is now an agent
+Thread summaries expose only an ID, a bounded first-user-message preview,
+timestamps, and active state. Preview messages are loaded in one batch, and
+threads are ordered by most recent activity with a deterministic tie-breaker.
+Forked subagent threads are excluded.
 
-Conversation memory alone made the original app a stateful chatbot: the model could use previous user and assistant messages, but it could not observe or change anything outside that conversation.
+Creation and switching return `409 Conflict` while the selected Session has a
+run, stream, approval, or suspension that makes rebinding unsafe. The UI locks
+space and conversation controls too, but the route check is authoritative for
+stale tabs and direct requests.
 
-The learning-backlog tools add a small agent loop:
+## Agent, tools, and approval
 
-```text
-user supplies a goal
-→ model decides whether it needs a tool
-→ tool observes or changes local backlog state
-→ tool result returns to the model
-→ model chooses another tool or produces a final response
-```
+[`src/mastra/agent.ts`](src/mastra/agent.ts) defines the assistant and Bedrock
+model. [`src/mastra/tools/learning-backlog.ts`](src/mastra/tools/learning-backlog.ts)
+defines four narrow tools:
 
-For example, “review my backlog and recommend what to learn next” does not contain the backlog itself. The model can choose `list_learning_items`, inspect one item with `get_learning_item`, and base its answer on those observations. When asked to change status, it can propose a constrained action, wait for approval, observe the real result, and then explain what happened.
+| Tool | Policy | Behavior |
+| --- | --- | --- |
+| `list_learning_items` | allow | List summaries, optionally by status. |
+| `get_learning_item` | allow | Read one item by exact ID. |
+| `mark_learning_item_started` | ask | Move only `not-started → in-progress`. |
+| `mark_learning_item_complete` | ask | Move an incomplete item to `completed`. |
 
-This agent is still reactive: a user message starts every run. It has no background loop, scheduler, internet access, general filesystem access, shell, or subagents.
+The mode exposes only those tools. Built-in planning, task, user-question, and
+subagent tools are disabled. The contained workspace under `.data/workspace`
+is read-only and no workspace tools are exposed.
 
-## Mastra concepts in this app
-
-### Agent and tools
-
-[`src/mastra/agent.ts`](src/mastra/agent.ts) defines the assistant's instructions, Bedrock model, and custom tools. [`src/mastra/tools/learning-backlog.ts`](src/mastra/tools/learning-backlog.ts) defines four narrow, typed Mastra tools:
-
-| Tool | Category | Policy | Behavior |
-| --- | --- | --- | --- |
-| `list_learning_items` | `read` | `allow` | Lists validated item summaries, optionally by status. |
-| `get_learning_item` | `read` | `allow` | Gets one validated item by exact ID. |
-| `mark_learning_item_started` | `edit` | `ask` | Moves only `not-started → in-progress`; otherwise returns `changed: false`. |
-| `mark_learning_item_complete` | `edit` | `ask` | Moves an incomplete item to `completed`; repeating it returns `changed: false`. |
-
-Read tools explicitly use `requireApproval: () => false`, so harmless observations can stay within one uninterrupted model run. Both edit tools use `requireApproval: true`. Their store operations are idempotent and cannot regress a completed item.
-
-### AgentController
-
-[`src/mastra/runtime.ts`](src/mastra/runtime.ts) creates the `AgentController`. The controller hosts shared infrastructure: the agent, storage, memory, modes, workspace, and tool permissions.
-
-The app deliberately has one mode, `chat`, which exposes exactly the four backlog tools. Built-in planning, task, user-question, and subagent tools are disabled. This keeps the learning surface bounded while still showing observation, action, and human approval.
-
-### Session
-
-The controller creates and caches one session per normalized fake user. Each session has a stable, hash-derived resource ID and owns live per-conversation state:
-
-- Active thread
-- Current mode and model
-- Run status and event subscriptions
-- Coalesced display-state snapshot
-- Tool permission categories
-- A pending tool approval, when the run is paused
-
-The browser never receives the session object. The Route Handler translates it into the small JSON shape in [`src/lib/chat-types.ts`](src/lib/chat-types.ts).
-
-### Thread, Memory, and Storage
-
-These layers have different jobs:
-
-- A thread identifies one conversation.
-- `Memory` saves and recalls the thread's messages for the agent.
-- `LibSQLStore` persists those records to `.data/mastra.db`.
-- The backlog store persists application state separately in `.data/learning-backlog.json`.
-
-Configuring storage alone creates persistent controller infrastructure, but persistent message history also requires the explicit `Memory` instance. Conversation history and backlog state are intentionally separate: resetting one does not have to reset the other.
-
-### Workspace
-
-The current beta API requires each session to have a valid `Workspace`. This app supplies a contained, read-only local filesystem under `.data/workspace`, but exposes no workspace tools to the model.
-
-## Tool loop, permissions, and approval
-
-The mode allowlist controls which tools exist in this chat. The category resolver maps list/get to `read` and start/complete to `edit`; session policy then resolves `read: allow` and `edit: ask`.
-
-An approved mutation crosses this boundary:
+An edit pauses the same model run until the exact tool-call ID is approved or
+declined:
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant UI as Next.js UI
-    participant Route as /api/chat
-    participant Session as AgentController Session
-    participant Tool as Backlog write tool
-    participant File as Local backlog JSON
+    participant UI
+    participant Route as Space chat route
+    participant Session
+    participant Tool
+    participant AppDB as app.db
 
-    User->>UI: Ask to mark an item started
+    User->>UI: Request a status change
     UI->>Route: POST message
-    Route->>Session: sendMessage()
-    Session-->>UI: SSE tool_approval_required snapshot
-    Note over Tool,File: No write has occurred
+    Route->>Session: sendMessage(trusted context)
+    Session-->>UI: SSE approval snapshot
+    Note over Tool,AppDB: No write has happened
     User->>UI: Approve once or decline
-    UI->>Route: PATCH decision + exact toolCallId
+    UI->>Route: PATCH exact toolCallId
     Route->>Session: respondToToolApproval()
     alt approved
-        Session->>Tool: execute({ id })
-        Tool->>File: Atomic idempotent update
-        File-->>Tool: { item, changed }
-        Tool-->>Session: Result
+        Session->>Tool: Execute
+        Tool->>AppDB: Atomic scoped transition
     else declined
         Session-->>Session: Continue with decline context
     end
-    Session-->>UI: SSE result and final response
+    Session-->>UI: Tool result and final response
 ```
 
-The PATCH route accepts only `approve` or `decline` for the exact tool-call ID currently armed in both the visible state and controller. Stale, mismatched, or duplicate decisions receive `409 Conflict`. The UI disables message, new-conversation, and decision controls while the gate is being resolved.
+Status transitions are monotonic and idempotent. Repeating a completed action
+returns `changed: false`; it cannot regress a completed item.
 
-Approval authorizes one proposed call, not all future writes. A decline executes no mutation. If the server stops while approval is pending, the write has not happened and the interrupted model run is not resumed automatically.
+## Persistence boundaries
 
-## Events and SSE
+The tracked file `data/learning-backlog.seed.json` is a template. Creating a
+space copies and validates that curriculum inside one transaction; later seed
+changes do not rewrite existing spaces.
 
-Mastra emits detailed events as an agent run progresses. The web bridge uses coalesced display state instead of interpreting raw token and tool events in React.
+Runtime data is divided intentionally:
 
-```mermaid
-flowchart LR
-    Raw["Raw controller events<br/>message, usage, tool, approval"] --> Reducer["Mastra display-state reducer"]
-    Reducer --> Display["Current display snapshot<br/>run, message, usage, tools, approval"]
-    History["Completed messages"] --> Projection["toChatState()"]
-    Display --> Projection
-    Error["Latest error"] --> Projection
-    Projection --> SSE["JSON snapshot over SSE"]
-    SSE --> React["React setChat(snapshot)"]
+```text
+.data/
+├── app.db                 # users' spaces and space-scoped learning items
+├── mastra.db              # resources, threads, messages, and Mastra storage
+├── workspace/             # contained read-only workspace root
+└── learning-backlog.json  # legacy artifact; no longer read, written, or migrated
 ```
 
-The route listens to a small set of high-level events:
-
-- `message_end` adds a completed message to transcript history.
-- Thread events clear the old transcript when the active conversation changes.
-- `error` retains a client-friendly error message.
-- `display_state_changed` triggers transmission of the latest UI snapshot.
-
-This keeps React from reconstructing Mastra's event state machine. Each browser update has one consistent shape, so reconnecting or missing an intermediate event is easier to recover from. SSE is one-way from server to browser: browser commands use HTTP methods, while controller state streams back over one long-lived `GET` request.
-
-## Refresh and persistence model
-
-A browser refresh discards React state and opens a new SSE connection. `GET /api/chat` asks the still-running server session for persisted messages and its current display state, then sends one initial `ChatState` snapshot.
-
-The server controller and per-user session map are memoized on `globalThis` in [`src/mastra/runtime.ts`](src/mastra/runtime.ts). This prevents Next.js development reloads from casually creating competing controllers, sessions, and database connections, but it is only a process-local cache.
-
-A server restart is the stronger persistence test. It destroys the controller, live sessions, subscriptions, display state, pending approvals, and active model runs. On the next request for a fake user, the app recreates that user's session with the same deterministic resource ID, opens the same LibSQL database, and resumes the user's most recent persisted thread and messages. The backlog is independently recovered from its JSON file.
-
-| State | Storage location | Browser refresh | Server restart |
+| State | Storage | Browser refresh | Server restart |
 | --- | --- | --- | --- |
-| Textarea contents | React | Lost | Lost |
-| SSE connection | Browser and server | Reconnected | Reconnected |
-| Active per-user `Session` object | Node.js process | Preserved | Recreated |
-| Threads and completed messages | LibSQL | Preserved | Preserved |
-| Learning-item statuses | Backlog JSON | Preserved | Preserved |
-| Streaming assistant text | Session display state | Usually preserved | Lost |
-| Current/latest visible tool activity | Session display state | Preserved while process lives | Lost |
-| Pending approval and active model run | Node.js process | Preserved while process lives | Lost |
+| Selected fake user | HTTP-only cookie | Preserved | Preserved |
+| Selected space | URL | Preserved | Preserved |
+| Spaces and learning-item status | `.data/app.db` | Preserved | Preserved |
+| Threads and completed messages | `.data/mastra.db` | Preserved | Preserved |
+| Active Session object and SSE connection | Node.js process | Reconnected/reused | Recreated |
+| Active thread | Session; latest updated thread on recreation | Preserved in-process | Latest persisted thread selected |
+| Streaming text and current tool panel | Session display state | Usually preserved | Lost |
+| Pending approval and active model run | Node.js process | Preserved in-process | Lost |
 
-Visible tool activity is deliberately operational state, not a durable audit trail. The saved transcript may describe an earlier tool result after restart, but the activity panel itself is reconstructed only from the live session's current/latest display state.
+On browser reconnection, the server sends a fresh snapshot instead of replaying
+event IDs. A process restart recreates each Session against the same stable
+resource and selects that resource's latest updated persisted thread.
 
-### Persistence limitations
+Tabs using different spaces have independent Sessions and active threads. Tabs
+using the same user and space intentionally share one live Session, so a thread
+switch or run in one such tab appears in the other.
 
-- The name prompt is not secure authentication. Knowing another name is enough to assume that identity and access its chats.
-- Tabs and browsers using the same normalized name intentionally share one session and active thread.
-- “New conversation” creates another persisted thread, but the UI has no thread list for returning to older conversations.
-- SSE events have no IDs or `Last-Event-ID` replay. Reconnection sends a fresh snapshot instead of replaying missed events.
-- A browser disconnect does not stop the Node.js model run, but a server crash does. A partial response or pending approval is not resumed.
-- The `globalThis` singleton does not coordinate multiple Node.js processes, serverless instances, or machines.
-- Local data files are not shared across hosts.
-- The UI can display the complete saved transcript, while `Memory` currently supplies only the latest 20 messages to the model.
-- Concurrent sends are rejected while a run is active; there is no multi-tab queue or broader concurrency design.
+## Local reset choices
 
-## Planned durable-agent and Kubernetes direction
+Stop the development server before deleting or editing databases.
 
-The next architecture step is documented in the [Mastra durable agent and Kubernetes high-availability plan](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md). It proposes Mastra's `createEventedAgent()`, Redis Streams, shared PostgreSQL state, explicit run identity, and run-aware SSE so multiple load-balanced pods can accept requests and observe the same background run without sticky sessions.
+Reset learning-item statuses in every existing space to the current tracked
+seed while preserving spaces and conversations:
 
-The intended gains are request-independent execution, reconnectable event streams, replica-safe conversation and backlog state, and continued application availability when an API or observer pod is replaced. The selected evented execution remains best effort: if the pod actively running Bedrock and the tool loop is killed, another pod can preserve and report the emitted state but does not automatically continue that run. An externally orchestrated variant such as `createInngestAgent()` would be the follow-on for executor-independent recovery.
+```sh
+sqlite3 .data/app.db "
+UPDATE app_learning_items
+SET status = CASE item_id
+  WHEN 'agent-controller-lifecycle' THEN 'completed'
+  WHEN 'memory-and-persistence' THEN 'completed'
+  ELSE 'not-started'
+END;
+"
+```
 
-This section describes planned work. The architecture and persistence matrix above remain the source of truth for the currently implemented local application.
+Reset application-owned data (spaces and their backlog copies), while leaving
+Mastra conversations on disk:
 
-## Useful commands
+```sh
+rm -f .data/app.db .data/app.db-shm .data/app.db-wal
+```
+
+Reset Mastra threads and messages, while preserving spaces and backlogs:
+
+```sh
+rm -f .data/mastra.db .data/mastra.db-shm .data/mastra.db-wal
+```
+
+Reset all current application state:
+
+```sh
+rm -f \
+  .data/app.db .data/app.db-shm .data/app.db-wal \
+  .data/mastra.db .data/mastra.db-shm .data/mastra.db-wal
+```
+
+The legacy `.data/learning-backlog.json` is deliberately omitted from these
+commands. This feature neither migrates nor deletes it.
+
+## Verification
 
 ```sh
 npm run typecheck
@@ -254,72 +251,48 @@ AWS_PROFILE=dev AWS_REGION=us-east-1 npm run agent-approval:smoke
 npm run persistence:smoke
 ```
 
-The smoke scripts make the learning checkpoints explicit:
+The checks cover:
 
-1. `bedrock:smoke` proves AWS and model access without Mastra.
-2. `controller:smoke` proves the AgentController event and generation path.
-3. `agent-tools:smoke` proves agent-selected read tools and a no-tool conversational path.
-4. `agent-approval:smoke` proves decline, approved start and completion, idempotency, completed-item protection, and automatic restoration of the original backlog.
-5. `persistence:smoke` starts a fresh runtime and proves saved messages can be restored.
+1. application schema, transactional provisioning, normalized uniqueness,
+   status transitions, and user/space isolation;
+2. trusted request identity and resource derivation;
+3. conversation preview batching, ordering, active state, and ownership;
+4. direct Bedrock and AgentController generation;
+5. agent-selected reads and approval-gated, idempotent edits;
+6. isolation of approval state between spaces; and
+7. restart restoration of a resource's multiple threads and active transcript.
 
-## Local data and reset
+## Current limitations
 
-The tracked seed is `data/learning-backlog.seed.json`. On first access, the backlog store copies and validates it into the ignored runtime area:
+- Fake authentication allows name impersonation and is unsuitable for
+  deployment.
+- The controller and Session cache are process-local; there is no coordination
+  across replicas or machines.
+- Active model runs and approvals are not durable across server failure.
+- SSE has no event replay.
+- Concurrent navigation is intentionally rejected while a Session is busy.
+- Space and thread rename/delete, sharing, invitations, cloning, and branching
+  are not implemented.
+- Existing spaces do not receive later curriculum-template changes.
+- Tool activity is operational display state, not a durable audit log.
+- Memory sends the most recent 20 messages to the model even though the UI can
+  display the full persisted transcript.
 
-```text
-.data/
-├── learning-backlog.json  # mutable learning-item status
-├── mastra.db              # threads, messages, controller storage
-└── workspace/             # contained read-only workspace root
-```
+The planned multi-process direction is described in
+[the durable-agent and Kubernetes plan](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md).
 
-To restore all learning items to their original seed statuses without deleting chat history, wait until the agent is idle and run:
+`AgentController` is beta. The installed TypeScript types and embedded package
+documentation are the source of truth, and dependencies are pinned exactly in
+`package.json` and `package-lock.json`.
 
-```sh
-rm .data/learning-backlog.json
-```
+## Plans and decisions
 
-The next backlog tool call recreates the runtime file from the seed. Starting a new conversation afterward avoids a transcript that describes statuses from before the reset.
-
-To fully reset the app, stop the development server and run:
-
-```sh
-rm -rf .data
-```
-
-This deletes both backlog state and conversation history. These are intentionally manual local-development workflows; the agent has no reset, arbitrary status, filesystem, or shell tool.
-
-## Current scope
-
-Implemented:
-
-- Local Next.js chat with Bedrock Claude Sonnet 5
-- Development-only name prompt with a 30-day HTTP-only browser session
-- One shared AgentController with isolated per-user sessions
-- Persisted, per-user conversation threads and memory
-- Agent-selected list/get observation tools
-- Approval-gated started/completed actions
-- Visible tool inputs, results, errors, and pending approval
-- Local seed/runtime backlog with atomic idempotent writes
-
-Intentionally deferred:
-
-- Real authentication, passwords, identity providers, roles, and protection against name impersonation
-- Per-user learning backlogs
-- Arbitrary create, edit, delete, reorder, or status-reset tools
-- Multiple modes and model selection
-- Background jobs, schedules, proactive notifications, and external APIs
-- General filesystem, shell, workspace, planning, task, and subagent tools
-- A thread picker or durable historical tool-activity viewer
-- File uploads and Markdown plugins
-- RAG and vector databases
-- Deployment and production hardening
-
-`AgentController` is beta. Its installed TypeScript types and embedded package documentation are treated as the source of truth, and dependency versions are pinned exactly in `package.json` and `package-lock.json`.
-
-Plans and decision records:
-
-- [`docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md`](docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md)
-- [`docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md`](docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md)
-- [`docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md`](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md)
-- [`docs/plans/2026-07-22-114821-basic-fake-auth-chat-isolation-plan.md`](docs/plans/2026-07-22-114821-basic-fake-auth-chat-isolation-plan.md)
+- [Initial AgentController/Next.js plan](docs/plans/2026-07-10-102257-mastra-agent-controller-nextjs-plan.md)
+- [Learning-backlog agent plan](docs/plans/2026-07-15-130130-basic-learning-backlog-agent-plan.md)
+- [Durable-agent and Kubernetes plan](docs/plans/2026-07-20-092510-mastra-durable-agent-kubernetes-ha-plan.md)
+- [Fake-auth chat-isolation plan](docs/plans/2026-07-22-114821-basic-fake-auth-chat-isolation-plan.md)
+- [Learning-spaces umbrella plan](docs/plans/2026-07-22-191728-learning-spaces-isolated-backlogs-plan.md)
+- [Phase 1: application database](docs/plans/2026-07-23-161759-learning-spaces-phase-1-app-database-plan.md)
+- [Phase 2: default-space isolation](docs/plans/2026-07-23-161800-learning-spaces-phase-2-default-space-isolation-plan.md)
+- [Phase 3: multiple spaces](docs/plans/2026-07-23-161801-learning-spaces-phase-3-multiple-spaces-plan.md)
+- [Phase 4: conversation navigation](docs/plans/2026-07-23-161802-learning-spaces-phase-4-conversation-navigation-plan.md)

@@ -1,20 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type { AgentControllerEvent } from "@mastra/core/agent-controller";
-import { getMastraController } from "../src/mastra/runtime.ts";
-import { LEARNING_BACKLOG_READ_TOOL_NAMES } from "../src/mastra/tools/learning-backlog.ts";
+import { createTemporaryLearningSmokeSpace } from "./learning-smoke-space.ts";
 
-const controller = await getMastraController();
-const smokeId = randomUUID();
-const session = await controller.createSession({
-  id: `agent-tools-smoke-${smokeId}`,
-  ownerId: "agent-tools-smoke",
-  resourceId: `agent-tools-smoke-${smokeId}`,
-});
-await session.permissions.setForCategory({
-  category: "read",
-  policy: "allow",
-});
-
+const fixture =
+  await createTemporaryLearningSmokeSpace("agent-tools-smoke");
+const [
+  { getMastraRuntime },
+  { createLearningRequestContext },
+  { LEARNING_BACKLOG_READ_TOOL_NAMES },
+] = await Promise.all([
+  import("../src/mastra/runtime.ts"),
+  import("../src/mastra/learning-request-context.ts"),
+  import("../src/mastra/tools/learning-backlog.ts"),
+]);
+const { session } = await getMastraRuntime(fixture.user, fixture.space);
 const observedToolNames = new Map<string, string>();
 
 const unsubscribe = session.subscribe((event: AgentControllerEvent) => {
@@ -41,6 +39,10 @@ try {
   await session.sendMessage({
     content:
       "List my learning backlog. Then inspect the full details of the agent-tools item using its exact id. Only after both observations, explain why it is the best next topic.",
+    requestContext: createLearningRequestContext(
+      fixture.user,
+      fixture.space,
+    ),
   });
 
   const messages = await session.thread.listActiveMessages({ limit: 4 });
@@ -77,9 +79,12 @@ try {
   }
 
   console.log(`assistant: ${finalText}`);
-  console.log("Agent read-tool loop successful");
+  console.log(
+    `Agent read-tool loop successful in isolated space ${fixture.space.id}`,
+  );
 } finally {
   unsubscribe();
+  await fixture.cleanup();
 }
 
 process.exit(0);

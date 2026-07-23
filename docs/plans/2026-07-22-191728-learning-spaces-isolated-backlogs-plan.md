@@ -16,6 +16,33 @@ Each space starts as an independent copy of the current Mastra curriculum. Mastr
 
 The existing shared backlog JSON and existing `fake-chat:<userId>` conversations remain untouched legacy data. Users start fresh in the new learning-space model.
 
+## Delivery phases
+
+This document is the umbrella architecture and combined acceptance record. The
+implementation is divided into four independently reviewable child plans:
+
+1. [Phase 1: application database foundation](./2026-07-23-161759-learning-spaces-phase-1-app-database-plan.md)
+   — completed 2026-07-23 —
+   adds migrations, learning-space persistence, the ownership-scoped repository,
+   and temporary-database tests without changing running application behavior.
+2. [Phase 2: default-space isolation](./2026-07-23-161800-learning-spaces-phase-2-default-space-isolation-plan.md)
+   — completed 2026-07-23 —
+   proves the full trust and isolation path for one automatically provisioned
+   space: SQL backlog, trusted request context, space-specific Mastra Session,
+   space-scoped routes, SSE, and approvals.
+3. [Phase 3: multiple-space experience](./2026-07-23-161801-learning-spaces-phase-3-multiple-spaces-plan.md)
+   — completed 2026-07-23 —
+   exposes space creation, URL-driven selection, the space controls, SSE
+   remounting, busy-state locks, and separate-tab behavior.
+4. [Phase 4: conversation navigation and hardening](./2026-07-23-161802-learning-spaces-phase-4-conversation-navigation-plan.md)
+   — completed 2026-07-23 —
+   adds thread summaries and switching, completes the sidebar, and closes the
+   combined documentation and acceptance matrix.
+
+Each child plan owns its implementation order, tests, documentation changes,
+and exit criteria. Do not defer all smoke coverage or documentation until phase
+4; each phase must remain usable and verifiable before the next begins.
+
 ## Intended relationships
 
 The persistent ownership hierarchy and the live runtime state are related but not interchangeable:
@@ -136,7 +163,7 @@ sessionId = learning-session:<userId>:<spaceId>
 ```
 
 - Keep one shared `AgentController`; every learning space receives an independent Session, active thread, run state, approval state, and display state.
-- Define a Zod-validated `LearningRequestContext` and construct it server-side for every `session.sendMessage()` call.
+- Define a Zod-validated `LearningRequestContext` and construct it server-side for every `session.sendMessage()` call and approval continuation.
 - Add the same `requestContextSchema` to every backlog tool. Tool arguments continue to contain only learning-item inputs; the model never chooses an owner or space.
 - In each tool, read `userId` and `spaceId` from `context.requestContext` and call ownership-scoped repository methods.
 - Verify both space ownership and item membership before every read or mutation.
@@ -168,19 +195,51 @@ PATCH /api/spaces/:spaceId/chat          # tool approval
 - Disable space/thread navigation and creation in the current tab while its Session is running or awaiting approval. Server-side thread switching also returns `409` while that Session is busy.
 - Support create and switch in v1; defer rename and delete actions.
 
-## Ordered implementation plan
+## Phased implementation order
 
-1. Add the application LibSQL client, schema migration runner, learning-space repository, and temporary-database repository tests.
-2. Move backlog persistence to the SQL repository while preserving the current validated item schemas and status-transition results.
-3. Introduce the validated learning request context and update every tool to require trusted owner and space identity.
-4. Refactor the runtime cache and identifiers from one Session per user to one Session per user and learning space.
-5. Add authenticated space, thread, and space-scoped chat APIs with ownership checks before Session resolution.
-6. Refactor the chat shell to add URL-addressed space selection, the space creator, conversation sidebar, thread switching, and busy-state navigation locks.
-7. Update smoke scripts to create isolated temporary learning spaces and pass valid request context into agent runs.
-8. Update the README, persistence model, reset instructions, and architecture diagrams to describe the two-database boundary and new resource hierarchy.
-9. Run automated checks and complete cross-user, cross-space, cross-thread, approval, and restart acceptance scenarios.
+### Phase 1: application database foundation
+
+Add the application LibSQL client, migration runner, space and item schema,
+atomic seeded-space creation, ownership-scoped repository, and
+temporary-database tests. Leave the current JSON-backed runtime behavior
+unchanged until this foundation passes independently.
+
+Checkpoint: repository and migration criteria pass without changing the browser
+or Mastra runtime.
+
+### Phase 2: default-space isolation
+
+Auto-provision **Mastra Fundamentals**, move tools to the SQL repository,
+introduce trusted request context, cache Sessions by user and space, add the
+space-scoped chat and thread-creation routes, and move the existing browser onto
+the URL-selected default space.
+
+Checkpoint: the existing single-space user experience works end to end through
+the new SQL, authorization, Session, SSE, and approval boundaries.
+
+### Phase 3: multiple-space experience
+
+Add space creation and selection, the inline space controls, URL navigation,
+space-specific SSE lifecycle, busy-state navigation locks, and separate-tab
+acceptance. Continue to expose only the active/latest conversation plus new
+conversation.
+
+Checkpoint: users can create and independently use multiple spaces without any
+cross-space backlog, transcript, run, or approval state.
+
+### Phase 4: conversation navigation and hardening
+
+Add thread summaries, previews, sorting, active-thread switching, the completed
+sidebar, authoritative busy-state conflicts, consolidated smoke coverage, final
+documentation, and the complete acceptance matrix.
+
+Checkpoint: the complete user → space → resource → thread hierarchy is visible
+and safely navigable in the browser.
 
 ## Verification criteria
+
+These are the combined release criteria for the umbrella feature. Each child
+plan owns and must pass the subset introduced by that phase.
 
 ### Repository and migration tests
 
@@ -221,3 +280,20 @@ PATCH /api/spaces/:spaceId/chat          # tool approval
 - Migration or deletion of existing `fake-chat:<userId>` Mastra resources and conversations.
 - Concurrent active-thread navigation within one Session; navigation remains locked while that Session is busy.
 - Production database operations, multi-process coordination, and durable execution beyond the current local architecture.
+
+## Umbrella completion record
+
+The learning-spaces umbrella feature completed on 2026-07-23 at 18:28:36
+America/New_York.
+
+All four child phases are implemented. The final application exposes the full
+fake-user → learning-space → Mastra resource/Session → conversation-thread
+hierarchy, keeps space backlogs in application-owned SQL, keeps Mastra
+conversation data in separate storage, enforces trusted ownership at every
+route and tool boundary, and supports isolated multi-space and multi-thread
+browser navigation.
+
+The combined gate passed 30 automated tests, typecheck, lint, production build,
+direct Bedrock, controller, read-tool, approval/idempotency, fresh-process
+multi-thread persistence, focused API/browser isolation checks, and
+`git diff --check`. The legacy JSON backlog remained untouched.

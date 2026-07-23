@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeOwnedName } from "./name-normalization.ts";
 
 export const FAKE_AUTH_COOKIE_NAME = "mastra_learning_user";
 export const FAKE_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
@@ -6,7 +7,6 @@ export const FAKE_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const COOKIE_VERSION = 1;
 const MAX_COOKIE_LENGTH = 512;
 const MAX_NAME_LENGTH = 50;
-const CONTROL_CHARACTERS = /[\p{Cc}\p{Cf}]/u;
 
 export interface FakeUser {
   id: string;
@@ -27,28 +27,11 @@ export class FakeAuthValidationError extends Error {
 }
 
 export function createFakeUser(name: string): FakeUser {
-  const unicodeNormalizedName = name.normalize("NFKC");
-
-  if (CONTROL_CHARACTERS.test(unicodeNormalizedName)) {
-    throw new FakeAuthValidationError(
-      "Name cannot contain control or invisible formatting characters.",
-    );
-  }
-
-  const displayName = unicodeNormalizedName.trim().replace(/\s+/gu, " ");
-  const length = [...displayName].length;
-
-  if (length === 0) {
-    throw new FakeAuthValidationError("Name is required.");
-  }
-
-  if (length > MAX_NAME_LENGTH) {
-    throw new FakeAuthValidationError(
-      `Name must be ${MAX_NAME_LENGTH} characters or fewer.`,
-    );
-  }
-
-  const identityName = displayName.toLocaleLowerCase("en-US");
+  const { displayName, identityName } = normalizeOwnedName(name, {
+    label: "Name",
+    maxLength: MAX_NAME_LENGTH,
+    createError: (message) => new FakeAuthValidationError(message),
+  });
   const id = createHash("sha256")
     .update(identityName, "utf8")
     .digest("hex")

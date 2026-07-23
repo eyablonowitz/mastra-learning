@@ -1,26 +1,39 @@
-import { createFakeUser } from "../src/lib/fake-auth.ts";
-import { getMastraRuntime } from "../src/mastra/runtime.ts";
+import { getPersistentLearningSmokeSpace } from "./learning-smoke-space.ts";
 
-const { session } = await getMastraRuntime(createFakeUser("controller-smoke"));
+const { user, space } =
+  await getPersistentLearningSmokeSpace("controller-smoke");
+const { getMastraRuntime } = await import("../src/mastra/runtime.ts");
+const { session } = await getMastraRuntime(user, space);
 const threads = await session.thread.list();
-let persistedMessageCount = 0;
-let persistedThreadId: string | null = null;
+const resourceId = session.identity.getResourceId();
+const activeThreadId = session.thread.getId();
 
-for (const thread of threads) {
-  const messages = await session.thread.listMessages({ threadId: thread.id });
-
-  if (messages.length > persistedMessageCount) {
-    persistedMessageCount = messages.length;
-    persistedThreadId = thread.id;
-  }
+if (
+  threads.length < 2 ||
+  threads.some((thread) => thread.resourceId !== resourceId)
+) {
+  throw new Error(
+    "Expected multiple persisted conversations scoped to the smoke-test space.",
+  );
 }
 
+if (
+  !activeThreadId ||
+  !threads.some((thread) => thread.id === activeThreadId)
+) {
+  throw new Error("Expected one persisted conversation to be active.");
+}
+
+const activeMessages = await session.thread.listActiveMessages();
+
 console.log(
-  `Restored ${persistedMessageCount} messages from thread ${persistedThreadId}`,
+  `Restored ${threads.length} threads and ${activeMessages.length} active-thread messages from space ${space.id}`,
 );
 
-if (persistedMessageCount < 2) {
-  throw new Error("Expected the controller smoke-test conversation to persist.");
+if (activeMessages.length < 2) {
+  throw new Error(
+    "Expected the latest controller smoke-test conversation to persist and resume.",
+  );
 }
 
 process.exit(0);

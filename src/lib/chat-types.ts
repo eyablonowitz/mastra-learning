@@ -7,6 +7,14 @@ export interface ChatMessage {
   error?: string;
 }
 
+export interface ThreadSummary {
+  id: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
+}
+
 export type ChatToolStatus =
   | "streaming_input"
   | "running"
